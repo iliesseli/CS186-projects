@@ -81,8 +81,7 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-
-        return null;
+        return getChild(getChildIdx(key)).get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -90,15 +89,41 @@ class InnerNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
         // TODO(proj2): implement
+        return getChild(0).getLeftmostLeaf();
 
-        return null;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        assert (keys.size() > 0);
+        int idx  = getChildIdx(key);
+        assert (idx != -1);
+        Optional<Pair<DataBox, Long>> res = getChild(idx).put(key, rid);
+        if (res.isPresent()) {
+            int d = metadata.getOrder();
+            idx = Collections.binarySearch(keys, res.get().getFirst());
+            keys.add(-idx - 1, res.get().getFirst());
+            children.add(-idx, res.get().getSecond());
+            if (keys.size() <= 2 * d) {
+                sync();
+                return Optional.empty();
+            } else {
+                // split
+                DataBox middleKey = keys.get(keys.size() / 2);
+                List<DataBox> rightKeys = keys.subList(keys.size() / 2 + 1, keys.size());
+                keys = keys.subList(0, keys.size() / 2);
+                List<Long> rightChildren = children.subList(children.size() / 2, children.size());
+                children = children.subList(0, children.size() / 2);
+                InnerNode rightNode = new InnerNode(metadata, bufferManager, rightKeys,
+                        rightChildren, treeContext);
+                sync();
+                assert (rightKeys.size() > 0);
 
+                return Optional.of(new Pair<>(middleKey, rightNode.getPage().getPageNum()));
+            }
+        }
         return Optional.empty();
     }
 
@@ -107,6 +132,31 @@ class InnerNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        assert (children.size() > 0);
+        int d = metadata.getOrder();
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> res  = getChild(children.size() - 1).bulkLoad(data, fillFactor);
+            if (res.isPresent()) {
+                keys.add(res.get().getFirst());
+                children.add(res.get().getSecond());
+                if (keys.size() > 2 * d) {
+                    // split
+                    DataBox middleKey = keys.get(keys.size() / 2);
+                    List<DataBox> rightKeys = keys.subList(keys.size() / 2 + 1, keys.size());
+                    keys = keys.subList(0, keys.size() / 2);
+                    List<Long> rightChildren = children.subList(children.size() / 2, children.size());
+                    children = children.subList(0, children.size() / 2);
+                    InnerNode rightNode = new InnerNode(metadata, bufferManager, rightKeys,
+                            rightChildren, treeContext);
+                    sync();
+                    assert (rightKeys.size() > 0);
+
+                    return Optional.of(new Pair<>(middleKey, rightNode.getPage().getPageNum()));
+                }
+            }
+        }
+
+        sync();
 
         return Optional.empty();
     }
@@ -114,9 +164,7 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
-
-        return;
+        getChild(getChildIdx(key)).remove(key);
     }
 
     // Helpers /////////////////////////////////////////////////////////////////
@@ -377,5 +425,18 @@ class InnerNode extends BPlusNode {
     @Override
     public int hashCode() {
         return Objects.hash(page.getPageNum(), keys, children);
+    }
+
+    private int getChildIdx(DataBox key) {
+        if (keys.size() > 0 && key.compareTo(keys.get(0)) < 0) {
+            return 0;
+        }
+
+        int idx = Collections.binarySearch(keys, key);
+        if (idx >= 0) {
+            return idx + 1;
+        } else {
+            return -idx - 1;
+        }
     }
 }
